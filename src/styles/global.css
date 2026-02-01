@@ -1,0 +1,248 @@
+/* =========================================================
+   CULTURE AUTOMOTIVE — Global UI Baseline (namespaced)
+   Wix Studio — place in Site > Global CSS
+   ========================================================= */
+
+/* ---------- Token Bridge (single source of truth) ---------- */
+:root{
+  /* Base (retain legacy brand vars for compatibility) */
+  --brand: #FF0000;
+  --brand-700: #C00000;
+  --ink: #0a0a0a;
+  --panel: #121212;
+  --panel-2: #1a1a1a;
+  --text: #ffffff;
+  --muted: #d1d5db;
+  --border: rgba(255,255,255,.10);
+  --border-strong: rgba(255,255,255,.16);
+  --shadow: 0 10px 30px rgba(0,0,0,.55);
+
+  /* Canonical CA tokens (use these everywhere) */
+  --ca-color-primary: var(--brand);
+  --ca-color-primary-600: var(--brand-700);
+  --ca-color-bg: var(--ink);
+  --ca-color-panel-1: var(--panel);
+  --ca-color-panel-2: var(--panel-2);
+  --ca-color-text: var(--text);
+  --ca-color-muted: var(--muted);
+  --ca-color-border: var(--border);
+  --ca-color-border-strong: var(--border-strong);
+
+  --ca-radius-sm: 8px;
+  --ca-radius-md: 12px;
+  --ca-radius-lg: 16px;
+  --ca-shadow-md: var(--shadow);
+
+  --ca-space-1: clamp(8px, 1.2vw, 12px);
+  --ca-space-2: clamp(12px, 1.6vw, 16px);
+  --ca-space-3: clamp(14px, 2vw, 20px);
+  --ca-space-4: clamp(18px, 2.4vw, 24px);
+  --ca-space-5: clamp(22px, 3vw, 32px);
+  --ca-space-6: clamp(28px, 4vw, 44px);
+
+  --ca-speed-fast: .15s;
+  --ca-speed-med: .22s;
+  --ca-speed-slow: .35s;
+
+  --ca-h1: clamp(36px, 5vw, 64px);
+  --ca-h2: clamp(26px, 3.2vw, 40px);
+  --ca-h3: clamp(20px, 2.2vw, 28px);
+  --ca-body: clamp(15px, 1.4vw, 18px);
+  --ca-meta: clamp(12px, 1vw, 14px);
+}
+
+/* ---------- Base & motion safety ---------- */
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *{animation:none !important;transition:none !important}
+}
+body{color:var(--ca-color-text);background:var(--ca-color-bg)}
+
+/* ----- Link reset (fixed) ----- */
+a{
+  color: var(--ca-color-text);
+  text-decoration: none;
+}
+/* Scoped inherit only inside CA sections */
+.ca-wrap a,
+.events-hub a,
+.live-map a {
+  color: inherit;
+}
+
+/* Ensure Wix buttons/menus stay readable */
+.wixui-button__label,
+nav [data-testid="linkElement"],
+[data-testid="menu-item"] > a {
+  color: var(--ca-color-text) !important;
+}
+
+img{max-width:100%;display:block}
+
+/* ---------- Skip link ---------- */
+.ca-skip-link{
+  position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden
+}
+.ca-skip-link:focus{
+  position:fixed;left:var(--ca-space-4);top:var(--ca-space-4);
+  width:auto;height:auto;padding:10px 14px;z-index:9999;
+  background:var(--ca-color-panel-1);color:#fff;border-radius:10px;
+  outline:2px solid var(--ca-color-primary);outline-offset:2px
+}
+
+/* ---------- A11y helpers ---------- */
+.ca-hide-visually{
+  position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+  margin:-1px!important;overflow:hidden!important;clip:rect(0 0 0 0)!important;
+  white-space:nowrap!important;border:0!important
+}
+.ca-focus-ring:focus-visible{outline:2px solid var(--ca-color-primary);outline-offset:2px;border-radius:10px}
+
+/* ---------- Layout utilities ---------- */
+.ca-wrap{max-width:1320px;margin-inline:auto;padding-inline:var(--ca-space-4)}
+.ca-stack{display:flex;flex-direction:column;gap:var(--ca-space-3)}
+.ca-stack--tight{gap:var(--ca-space-2)}
+.ca-stack--loose{gap:var(--ca-space-5)}
+.ca-inline{display:flex;align-items:center;gap:var(--ca-space-2);flex-wrap:wrap}
+.ca-cluster{display:grid;grid-auto-flow:column;gap:var(--ca-space-3);align-items:center}
+.ca-grid{display:grid;gap:var(--ca-space-4)}
+.ca-grid--2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.ca-grid--3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.ca-grid--4{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media (max-width:1100px){.ca-grid--4{grid-template-columns:repeat(3,1fr)}}
+@media (max-width:900px){.ca-grid--3,.ca-grid--4{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.ca-grid--2,.ca-grid--3,.ca-grid--4{grid-template-columns:1fr}}
+
+/* ---------- Type utilities ---------- */
+.ca-h1{font-size:var(--ca-h1);line-height:1.06;font-weight:900}
+.ca-h2{font-size:var(--ca-h2);line-height:1.08;font-weight:850}
+.ca-h3{font-size:var(--ca-h3);line-height:1.12;font-weight:800}
+.ca-body{font-size:var(--ca-body);line-height:1.7}
+.ca-meta{font-size:var(--ca-meta);letter-spacing:.2px;color:var(--ca-color-muted)}
+
+/* ---------- Line clamp ---------- */
+.ca-line-clamp-2{-webkit-line-clamp:2;line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+.ca-line-clamp-3{-webkit-line-clamp:3;line-clamp:3;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+
+/* ---------- Buttons (canonical) ---------- */
+.ca-btn{
+  --_bg: linear-gradient(180deg,var(--ca-color-primary),var(--ca-color-primary-600));
+  display:inline-flex;align-items:center;gap:.6rem;justify-content:center;
+  min-height:44px;padding:12px 16px;border-radius:12px;
+  color:#fff;border:1px solid var(--ca-color-border-strong);background:var(--_bg);
+  font-weight:900;letter-spacing:.2px;box-shadow:0 10px 28px rgba(255,0,0,.35);
+  transition:transform var(--ca-speed-med),box-shadow var(--ca-speed-med),background var(--ca-speed-med)
+}
+.ca-btn:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(255,0,0,.5)}
+.ca-btn:active{transform:scale(.98)}
+.ca-btn--sm{min-height:34px;padding:8px 12px;border-radius:10px;font-size:14px}
+.ca-btn--ghost{background:transparent;border:1px solid var(--ca-color-border-strong)}
+.ca-btn--outline{background:transparent;border:2px solid var(--ca-color-primary)}
+.ca-btn--subtle{background:rgba(255,0,0,.12);border:1px solid var(--ca-color-border-strong)}
+
+/* ---------- Cards ---------- */
+.ca-card{
+  background:linear-gradient(180deg,var(--ca-color-panel-1),var(--ca-color-panel-2));
+  border:1px solid var(--ca-color-border);border-radius:16px;padding:var(--ca-space-3);
+  box-shadow:var(--ca-shadow-md);transition:border-color var(--ca-speed-med),transform var(--ca-speed-med);
+  position:relative;overflow:hidden
+}
+.ca-card:hover{transform:translateY(-3px);border-color:rgba(255,0,0,.45)}
+.ca-card__media{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:12px}
+.ca-card__title{font-size:clamp(18px,1.9vw,22px);line-height:1.2;font-weight:850}
+.ca-card__text{color:var(--ca-color-muted)}
+
+/* ---------- Badges / Tags ---------- */
+.ca-tag{font-size:12px;border-radius:999px;border:1px solid rgba(255,255,255,.25);background:rgba(255,0,0,.10);color:#ffe2e2;padding:4px 8px}
+.ca-tag--price{background:rgba(255,255,255,.06);color:#fff;border-color:rgba(255,255,255,.22);backdrop-filter:blur(4px)}
+.ca-tag--price.is-free{background:rgba(0,255,128,.14)}         
+.ca-tag--price.is-free--soft{background:rgba(255,255,255,.08)}  
+
+/* ---------- Section rhythm ---------- */
+.ca-section{padding-block:var(--ca-space-6)}
+.ca-section--tight{padding-block:var(--ca-space-5)}
+.ca-section__head{margin-bottom:var(--ca-space-3)}
+
+/* ---------- Skeletons ---------- */
+@keyframes ca-shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}
+.ca-skel{position:relative;overflow:hidden;border-radius:12px;background:#0c0c0c;border:1px solid var(--ca-color-border)}
+.ca-skel-line{height:12px;border-radius:8px;background:linear-gradient(90deg,rgba(255,255,255,.06) 25%,rgba(255,255,255,.12) 37%,rgba(255,255,255,.06) 63%);background-size:400% 100%;animation:ca-shimmer 1.4s ease-in-out infinite}
+
+/* ---------- Prefers-reduced-motion ---------- */
+@media (prefers-reduced-motion: reduce){
+  .ca-btn,.ca-card{transition:none;transform:none!important;animation:none!important;box-shadow:none}
+}
+
+/* =========================================================
+   Homepage Hooks (replace ID styling with class hooks)
+   ========================================================= */
+.ca-featured__media{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:12px}
+.ca-featured__title{font-size:clamp(18px,1.9vw,22px);font-weight:850;line-height:1.2}
+.ca-featured__subtitle{color:var(--ca-color-muted)}
+@supports (-webkit-line-clamp:2){
+  .ca-featured__title{-webkit-line-clamp:2;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+  .ca-featured__subtitle{-webkit-line-clamp:3;display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}
+}
+.ca-testimonial__image{width:100%;aspect-ratio:16/10;object-fit:cover;border-radius:12px;filter:contrast(1.04) saturate(1.1)}
+.ca-testimonial__badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:rgba(255,0,0,.12);border:1px solid rgba(255,255,255,.25);font-weight:800}
+
+/* ---------- Mobile CTA bar (scoped) ---------- */
+#ctaFooter{position:relative}
+#mobileCTABar1{
+  position:sticky;bottom:0;z-index:60;background:linear-gradient(180deg,#141414,#0d0d0d);
+  border-top:1px solid rgba(255,255,255,.12);padding:10px;backdrop-filter:saturate(1.1) blur(6px)
+}
+#mobileCtaBtn{
+  width:100%;min-height:48px;border-radius:12px;color:#fff;
+  background:linear-gradient(180deg,var(--brand),var(--brand-700));
+  border:1px solid var(--border-strong);font-weight:900;letter-spacing:.2px;
+  box-shadow:0 10px 28px rgba(255,0,0,.35);transition:transform .2s,box-shadow .2s
+}
+#mobileCtaBtn:hover{transform:translateY(-2px);box-shadow:0 16px 36px rgba(255,0,0,.5)}
+#mobileCtaBtn:active{transform:scale(.98)}
+@media (min-width:981px){#mobileCTABar1{display:none !important}}
+@media (prefers-reduced-motion: reduce){#mobileCtaBtn{transition:none;box-shadow:none}}
+
+/* =========================================================
+   Optimized: Homepage, Events Hub & Live Map Sections
+   ========================================================= */
+
+/* ==================== Homepage ==================== */
+.homepage-featured__image {
+  width: 100%;
+  aspect-ratio: 16/10;
+  object-fit: cover;
+  border-radius: var(--ca-radius-md);
+}
+.homepage-featured__title {
+  font-size: clamp(18px, 1.9vw, 22px);
+  font-weight: 850;
+  line-height: 1.2;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.homepage-featured__subtitle {
+  color: var(--ca-color-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* =========================================================
+   EVENTS HUB (scope everything under .events-hub)
+   ========================================================= */
+.events-hub{
+  --container: 1280px;
+  background:
+    radial-gradient(1200px 500px at 80% -50%, rgba(255,0,0,.22), transparent 60%),
+    radial-gradient(900px 500px at -10% 10%, rgba(192,0,0,.18), transparent 50%),
+    var(--ca-color-bg);
+  color: var(--ca-color-text);
+}
+
+/* … [rest of your Events Hub & Live Map CSS unchanged] … */

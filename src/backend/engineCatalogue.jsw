@@ -1,0 +1,226 @@
+// backend/engineCatalogue.jsw
+// Culture Automotive — Engine Build Catalogue Payload
+// ✅ Wix-friendly: backend-only imports
+// ✅ Returns all packs + bucketed HP filter for simple customer UX
+
+import wixData from "wix-data";
+import wixMedia from "wix-media-backend";
+
+const COLLECTIONS = {
+  packs: "EnginePacks",
+};
+
+function pick(item, keys, fallback = "") {
+  for (const k of keys) {
+    const v = item?.[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return fallback;
+}
+
+function normalizeWixStaticUrl(s) {
+  const v = String(s ?? "").trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("//")) return "https:" + v;
+  if (/^static\.wixstatic\.com\//i.test(v)) return "https://" + v;
+  return v;
+}
+
+async function toImageUrl(val) {
+  try {
+    if (!val) return "";
+    if (typeof val === "string") {
+      const s = normalizeWixStaticUrl(val);
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    if (typeof val === "object") {
+      const src = val.src ?? val.url ?? val.fileUrl;
+      if (!src) return "";
+      const s = normalizeWixStaticUrl(String(src));
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    return "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function numOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function uniqSorted(arr) {
+  return [...new Set((arr || []).filter(Boolean))]
+    .sort((a, b) => String(a).localeCompare(String(b)));
+}
+
+/**
+ * Converts raw hpBand text into a simple customer-friendly bucket.
+ * Examples:
+ * "350–550 hp" -> "350–550 hp"
+ * "800-1000+ hp" -> "1000+ hp" (max number wins)
+ */
+function hpBucketFromBand(hpBand) {
+  const band = String(hpBand || "").trim();
+  const nums = band.match(/\d+/g)?.map(n => parseInt(n, 10)).filter(Number.isFinite) || [];
+  if (!nums.length) return ""; // unknown / not provided
+
+  const maxHp = Math.max(...nums);
+
+  if (maxHp >= 350 && maxHp <= 550) return "350–550 hp";
+  if (maxHp > 550 && maxHp <= 900) return "550–900 hp";
+  if (maxHp >= 1000) return "1000+ hp";
+
+  if (maxHp < 350) return "Up to 350 hp";
+  return "";
+}
+
+function stageRank(v) {
+  const s = String(v ?? "").toLowerCase();
+  if (s.includes("street")) return 0;
+  if (s.includes("track")) return 1;
+  if (s.includes("race")) return 2;
+  return 9;
+}
+
+function buildLinks() {
+  return {
+    engineBuildHome: "/engine-build",
+
+    catalogue: "/engine-build/build-catalogue",
+    catalogueBase: "/engine-build/build-catalogue",
+
+    // ✅ INTERIM TEST ROUTE (Wix safe + matches your desired flow)
+    packDetailsBase: "/engine-build/engine-details",
+    detailsBase: "/engine-build/engine-details",
+
+    // keep legacy mapping in case any other page references it
+    legacyPackDetailsBase: "/engine-build/build-details",
+
+    startBuild: "/engine-build/engine-pack-builder",
+    builderBase: "/engine-build/engine-pack-builder",
+    startBuildBase: "/engine-build/engine-pack-builder",
+
+    finance: "/cultr-finance/loan-options",
+    financeBase: "/cultr-finance/loan-options",
+
+    membership: "/membership-rewards",
+    referFriends: "/refer-friends",
+    verify: "/verify/application",
+    contact: "/contact",
+  };
+}
+
+
+export async function getEngineCataloguePayload(params = {}) {
+  const debug = { ok: true, errors: [] };
+
+  const packRef = String(params?.packRef || "").trim();
+  const stage = String(params?.stage || "").trim();
+
+  try {
+    const res = await wixData.query(COLLECTIONS.packs).limit(1000).find();
+    const items = res.items ?? [];
+
+    const packs = await Promise.all(
+      items.map(async (i) => {
+        const img = pick(i, ["image_url", "imageUrl", "cardImg", "heroImg", "image", "heroImage"], "");
+        const packKeyRaw = pick(i, ["packKey"], "");
+        const detailsSlug = pick(i, ["detailsSlug", "slug", "_id"], i._id);
+
+        const packKey = packKeyRaw || detailsSlug || i._id;
+
+        const basePriceAud =
+          numOrNull(i.basePriceAud ?? i.basePriceAUD ?? i.baseAUD ?? i.basePrice);
+
+        const isPOA = !!i.isPOA || !basePriceAud;
+
+        const hpBand = pick(i, ["hpBand", "powerBand"], "");
+        // ✅ NEW: allow manual override from CMS hpFilter field, else derive from band
+        const hpFilter = pick(i, ["hpFilter"], "") || hpBucketFromBand(hpBand);
+
+        return {
+          _id: i._id,
+          packKey,
+          detailsSlug,
+
+          title: pick(i, ["title", "name"], "Engine Pack"),
+          platform: pick(i, ["platform", "enginePlatform"], ""),
+          packageTier: pick(i, ["packageTier", "tier", "stage"], ""),
+          hpBand,         // raw display
+          hpFilter,       // bucket filter
+          bestFor: pick(i, ["bestFor"], ""),
+
+          isFeatured: !!i.isFeatured,
+          isSignature: !!i.isSignature,
+
+          isPOA,
+          basePriceAud,
+          image_url: await toImageUrl(img),
+
+          pros: Array.isArray(i.pros)
+            ? i.pros
+            : (String(i.pros ?? "").trim() ? String(i.pros).split("\n") : []),
+
+          cons: Array.isArray(i.cons)
+            ? i.cons
+            : (String(i.cons ?? "").trim() ? String(i.cons).split("\n") : []),
+        };
+      })
+    );
+
+    packs.sort((a, b) => {
+      const p = String(a.platform).localeCompare(String(b.platform));
+      if (p) return p;
+      const t = stageRank(a.packageTier) - stageRank(b.packageTier);
+      if (t) return t;
+      return String(a.hpBand).localeCompare(String(b.hpBand));
+    });
+
+    // ✅ Filter options
+    const filterOptions = {
+      platforms: uniqSorted(packs.map((p) => p.platform)),
+      tiers: uniqSorted(packs.map((p) => p.packageTier)).sort((a, b) => stageRank(a) - stageRank(b)),
+      // ✅ bucketed dropdown values
+      hpBands: uniqSorted(packs.map((p) => p.hpFilter)).filter(Boolean),
+    };
+
+    return {
+      ctx: { viewMode: "page", initialFilters: { packRef, stage } },
+      links: buildLinks(),
+      filterOptions,
+      packs,
+
+      compare: { max: 3, lightboxId: "lightbox1" },
+
+      ui: {
+        title: "Engine Build Catalogue",
+        subtitle: "Filter by platform, tier and power band. Compare up to 3 packs instantly.",
+      },
+
+      debug,
+    };
+  } catch (e) {
+    debug.ok = false;
+    debug.errors.push("catalogue payload error: " + (e?.message ?? String(e)));
+
+    return {
+      ctx: { viewMode: "page", initialFilters: { packRef, stage } },
+      links: buildLinks(),
+      filterOptions: { platforms: [], tiers: [], hpBands: [] },
+      packs: [],
+      compare: { max: 3, lightboxId: "lightbox1" },
+      ui: {
+        title: "Engine Build Catalogue",
+        subtitle: "Payload failed. Check EnginePacks permissions and backend/engineCatalogue.jsw.",
+      },
+      debug,
+    };
+  }
+}

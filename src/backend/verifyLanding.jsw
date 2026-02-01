@@ -1,0 +1,131 @@
+// backend/verifyLanding.jsw
+// CULTR Verify landing payload (trust + governance locked)
+
+function getVerifyLinks() {
+  return {
+    // Verify routes
+    verifyHome: "/verify",
+    verifyTool: "/verify/application",
+    trust: "/verify/trust",
+    forWorkshops: "/verify/for-workshop/",
+
+    // Shared platform routes (UPDATED)
+    financeHome: "/cultr-finance",
+    financeOptions: "/cultr-finance/loan-options",
+
+    membership: "/membership-rewards",
+    contact: "/contact",
+  };
+}
+
+function buildMeta() {
+  return {
+    heroKicker: "Independent quote sanity-checking",
+    heroTitle: "CULTR VERIFY",
+    heroSubtitle:
+      "Know where a quote sits in the market — before you commit. Calm context, confidence indicators, and governance that protects both customer and business.",
+
+    govTitle: "Governance that builds trust",
+    govIntro:
+      "CULTR Verify is designed to protect the customer and the business: evidence-based guidance, privacy-aware handling, and no public blame loop.",
+    govFine:
+      "The days of “priority service” because you know someone are done. Sustainable businesses are built on consistent outcomes — not who you know.",
+
+    scTitle: "Real-world savings scenarios",
+    scIntro:
+      "The goal isn’t to “win” against a workshop — it’s to avoid preventable spend and protect both sides from scope confusion.",
+    legalFine:
+      "CULTR Verify provides informational guidance only. It does not provide legal advice, and it does not guarantee pricing outcomes.",
+  };
+}
+
+function buildGovernanceItems() {
+  return [
+    {
+      title: "Neutral output",
+      text:
+        "We don’t accuse. We highlight pricing position, scope gaps, and confidence so decisions stay fair.",
+    },
+    {
+      title: "Data minimisation",
+      text:
+        "Only what’s needed to score (quote + zone + optional vehicle). No browsing your life, no selling your info.",
+    },
+    {
+      title: "Audit-ready",
+      text:
+        "Results are structured, repeatable, and explainable — so customers can ask better questions without conflict.",
+    },
+  ];
+}
+
+function buildGovernanceChips() {
+  return [
+    { label: "Consent-first uploads", accent: true },
+    { label: "No “priority” bias" },
+    { label: "Explains uncertainty" },
+    { label: "No public naming" },
+    { label: "Safe dispute framing" },
+    { label: "Protects good workshops" },
+    { label: "Scope clarity > drama" },
+    { label: "Repeatable logic" },
+  ];
+}
+
+function buildScenarios() {
+  return [
+    {
+      title: "Brake job with “extras”",
+      savingTag: "Saved $480",
+      body:
+        "Quote included rotors + pads + a surprise “caliper service” line. Verify flagged it as optional unless symptoms existed.",
+      outcome:
+        "Outcome: customer confirmed condition, kept essential scope, avoided unnecessary add-on.",
+    },
+    {
+      title: "Cooling system quote",
+      savingTag: "Saved $310",
+      body:
+        "Parts list mixed OEM + premium upgrades without clarity. Verify highlighted the mismatch and suggested confirmation questions.",
+      outcome:
+        "Outcome: workshop clarified options, customer chose the right tier confidently.",
+    },
+    {
+      title: "Suspension refresh",
+      savingTag: "Saved $650",
+      body:
+        "Quote combined “labour package” with duplicated alignment line. Verify flagged duplication risk and asked for breakdown.",
+      outcome:
+        "Outcome: corrected invoice, workshop kept trust, customer avoided paying twice.",
+    },
+    {
+      title: "Pricing zone confusion",
+      savingTag: "Saved time",
+      body:
+        "Customer compared metro pricing to regional quote. Verify used postcode zone to show the difference was normal.",
+      outcome:
+        "Outcome: reduced conflict and “shopping rage” — customer understood local reality.",
+    },
+  ];
+}
+
+/**
+ * Public payload function used by the /verify page.
+ * Keep fast + deterministic (no external calls in MVP).
+ */
+export async function getVerifyLandingPayload(ctx = {}) {
+  const links = getVerifyLinks();
+
+  return {
+    ctx: {
+      viewMode: (ctx && ctx.viewMode) || "live",
+      ts: Date.now(),
+    },
+    links,
+    meta: buildMeta(),
+    governanceItems: buildGovernanceItems(),
+    governanceChips: buildGovernanceChips(),
+    scenarios: buildScenarios(),
+    debug: { ok: true, errors: [] },
+  };
+}

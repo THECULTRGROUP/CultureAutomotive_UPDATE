@@ -1,0 +1,27 @@
+{
+  "devDependencies": {
+    "@wix/cli": "^1.0.0",
+    "@wix/eslint-plugin-cli": "^1.0.0",
+    "eslint": "^8.25.0",
+    "react": "16.14.0"
+  },
+  "dependencies": {
+    "@wix/analytics": "1.12.0",
+    "@wix/automations": "1.0.170",
+    "@wix/http-functions": "1.0.0",
+    "wix-data": "0.0.1-security",
+    "node-fetch": "3.3.2",
+    "@wix/crm": "1.0.332",
+    "@wix/functions": "1.0.15",
+    "@wix/automations_automations": "1.0.5",
+    "@wix/site-window": "1.32.0",
+    "wix-media-manager-backend": "0.0.1-security",
+    "@wix/stores": "1.0.423",
+    "@wix/members": "1.0.229"
+  },
+  "scripts": {
+    "postinstall": "wix sync-types",
+    "dev": "wix dev",
+    "lint": "eslint ."
+  }
+}

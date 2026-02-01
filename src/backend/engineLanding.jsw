@@ -1,0 +1,164 @@
+// backend/engineLanding.jsw
+// Culture Automotive — Engine Build Landing payload
+// Provides a safe, schema-tolerant payload for the /engine-build landing HTML iframe.
+
+import wixData from "wix-data";
+import { mediaManager } from "wix-media-backend";
+
+const PACKS_COLLECTION = "EnginePacks";
+
+// --- helpers -------------------------------------------------
+function normStr(v) {
+  return String(v || "").trim();
+}
+
+function toImageUrl(value) {
+  if (!value) return "";
+  try {
+    if (typeof value === "object") {
+      const o = value;
+      value = o.src || o.url || o.fileUrl || o.image || o.media || o.value || "";
+    }
+    let s = String(value || "").trim();
+    if (!s) return "";
+
+    // wix:image://v1/<hash>... -> https://static.wixstatic.com/media/<hash>
+    if (s.startsWith("wix:image://v1/")) {
+      const hash = s.replace("wix:image://v1/", "").split("/")[0].split("#")[0].split("?")[0];
+      return `https://static.wixstatic.com/media/${hash}`;
+    }
+
+    // wix:document:// / wix:video:// etc
+    if (s.startsWith("wix:")) {
+      const url = mediaManager.getPublicUrl(s);
+      return url || "";
+    }
+
+    return s;
+  } catch (_) {
+    return "";
+  }
+}
+
+function mapPack(item = {}) {
+  const packKey = normStr(item.packKey || item.detailsSlug || item.slug || item._id);
+
+  return {
+    _id: item._id,
+    packKey,
+    detailsSlug: normStr(item.detailsSlug || item.slug || ""),
+    title: normStr(item.title || item.name || item.displayName || "Engine Pack"),
+
+    // ✅ this is what the HTML will use as "promoTitle" line if present
+    promoTitle: normStr(item.promoTitle || item.promo_title || ""),
+
+    platform: normStr(item.platform || item.engineKey || item.engine || ""),
+    packageTier: normStr(item.packageTier || item.tier || ""),
+    hpBand: normStr(item.hpBand || item.hp || ""),
+    bestFor: normStr(item.bestFor || item.useCase || ""),
+
+    // pricing (AUD)
+    basePriceAUD: item.basePriceAUD ?? item.basePriceAud ?? item.baseAUD ?? item.basePrice ?? null,
+
+    // media
+    heroImgUrl: toImageUrl(item.heroImgUrl || item.heroImg || item.imageUrl || item.image_url || item.image || ""),
+    cardImgUrl: toImageUrl(item.cardImgUrl || item.cardImg || ""),
+    socialProofImg: toImageUrl(item.socialProofImg || ""),
+
+    // flags
+    isFeatured: !!item.isFeatured,
+    isSignature: !!item.isSignature,
+    isPOA: !!item.isPOA,
+  };
+}
+
+function buildLinks() {
+  return {
+    catalogue: "/engine-build/build-catalogue",
+    catalogueBase: "/engine-build/build-catalogue",
+
+    selectPackage: "/engine-build/select-package",
+    selectPackageBase: "/engine-build/select-package",
+
+    // ✅ align with your current front-end usage
+    packDetailsBase: "/engine-build/build-details",
+    detailsBase: "/engine-build/build-details",
+
+    startBuild: "/engine-build/engine-pack-builder",
+    startBuildBase: "/engine-build/engine-pack-builder",
+    builderBase: "/engine-build/engine-pack-builder",
+
+    finance: "/cultr-finance/loan-options",
+    verify: "/verify/application",
+
+    // ✅ align with your current routes
+    membership: "/engine-build/membership-rewards",
+
+    contact: "/contact",
+    refer: "/refer-friends",
+  };
+}
+
+// --- main export ---------------------------------------------
+export async function getEngineLandingPayload(/* optional params */) {
+  const errors = [];
+  let signatureItems = [];
+  let allItems = [];
+
+  try {
+    const sig = await wixData.query(PACKS_COLLECTION)
+      .eq("isSignature", true)
+      .limit(20)
+      .ascending("order")
+      .find();
+    signatureItems = sig.items || [];
+  } catch (e) {
+    errors.push(`Signature query failed: ${e?.message || e}`);
+  }
+
+  try {
+    const all = await wixData.query(PACKS_COLLECTION)
+      .limit(60)
+      .ascending("order")
+      .find();
+    allItems = all.items || [];
+  } catch (e) {
+    errors.push(`Packs query failed: ${e?.message || e}`);
+  }
+
+  // Signature grid list (safe)
+  const signaturePacks = signatureItems.slice(0, 9).map(mapPack);
+
+  // ✅ Featured MUST have isFeatured === true
+  // Priority: any item in allItems with isFeatured true (first match)
+  const featuredRaw =
+    (allItems || []).find((p) => !!p?.isFeatured) ||
+    (signatureItems || []).find((p) => !!p?.isFeatured) ||
+    null;
+
+  const featuredPack = featuredRaw ? mapPack(featuredRaw) : null;
+
+  return {
+    version: "engine-landing@2",
+    ts: Date.now(),
+    links: buildLinks(),
+
+    packs: signaturePacks,
+    featured: featuredPack, // may be null if none set in CMS
+
+    promos: [],
+    benefits: [],
+    meta: {},
+
+    detailMeta: {
+      weeklySpecials: [],
+      featureSegments: [],
+      cta: null,
+    },
+
+    debug: {
+      ok: errors.length === 0,
+      errors,
+    },
+  };
+}

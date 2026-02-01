@@ -1,0 +1,65 @@
+import wixData from "wix-data";
+
+function hpBucketFromBand(hpBand) {
+  const band = String(hpBand || "");
+  const nums = band.match(/\d+/g)?.map(n => parseInt(n, 10)).filter(Number.isFinite) || [];
+  if (!nums.length) return "";
+
+  const maxHp = Math.max(...nums);
+
+  if (maxHp >= 350 && maxHp <= 550) return "350-550 hp";
+  if (maxHp > 550 && maxHp <= 900) return "550-900 hp";
+  if (maxHp >= 1000) return "1000+ hp";
+  if (maxHp < 350) return "Up to 350 hp";
+  return "";
+}
+
+export async function backfillHpFilter({ dryRun = true } = {}) {
+  const collection = "EnginePacks";
+
+  let res = await wixData.query(collection).limit(1000).find();
+  const items = [...(res.items || [])];
+
+  while (res.hasNext()) {
+    res = await res.next();
+    items.push(...(res.items || []));
+  }
+
+  const updates = [];
+  for (const it of items) {
+    const existing = String(it.hpFilter || "").trim();
+    if (existing) continue;
+
+    const hpBand = it.hpBand || it.powerBand || "";
+    const bucket = hpBucketFromBand(hpBand);
+    if (!bucket) continue;
+
+    updates.push({ _id: it._id, hpFilter: bucket });
+  }
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      total: items.length,
+      wouldUpdate: updates.length,
+      sample: updates.slice(0, 10),
+    };
+  }
+
+  // commit updates (chunked)
+  const chunkSize = 50;
+  let updated = 0;
+  for (let i = 0; i < updates.length; i += chunkSize) {
+    const chunk = updates.slice(i, i + chunkSize);
+    await wixData.bulkUpdate(collection, chunk);
+    updated += chunk.length;
+  }
+
+  return {
+    ok: true,
+    dryRun: false,
+    total: items.length,
+    updated,
+  };
+}

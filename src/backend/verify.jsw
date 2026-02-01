@@ -1,0 +1,48 @@
+// backend/verify.jsw
+import { fetch } from 'wix-fetch';
+import wixSecretsBackend from 'wix-secrets-backend';
+
+function safeString(v, max = 200) {
+  if (typeof v !== 'string') return '';
+  return v.trim().slice(0, max);
+}
+
+export async function parseAndScore(payload) {
+  const base = await wixSecretsBackend.getSecret('VERIFY_API_ENDPOINT');
+  const apiKey = await wixSecretsBackend.getSecret('VERIFY_API_KEY');
+
+  const endpoint = `${String(base || '').replace(/\/+$/, '')}/parse-and-score`;
+
+  const body = {
+    fileName: safeString(payload?.fileName, 140),
+    mimeType: safeString(payload?.mimeType, 80),
+    base64: safeString(payload?.base64, 10_000_000), // upper bound safety (still protected by frontend)
+    vehicle: safeString(payload?.vehicle, 180),
+    postcode: safeString(payload?.postcode, 8)
+  };
+
+  // Hard requirement: postcode must be 4 digits
+  if (!/^\d{4}$/.test(body.postcode)) {
+    throw new Error('INVALID_POSTCODE');
+  }
+
+  const res = await fetch(endpoint, {
+    method: 'post',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(apiKey ? { 'x-verify-api-key': apiKey } : {})
+    },
+    body: JSON.stringify(body)
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`VERIFY_API_ERROR ${res.status}: ${text}`);
+  }
+
+  // Expect:
+  // audit_state, meter_label, meter_position, meter_band, explanation,
+  // parse_confidence, benchmark_confidence, call_to_action, audit_badge_text
+  // Optional: detected_vehicle, detected_postcode
+  return await res.json();
+}

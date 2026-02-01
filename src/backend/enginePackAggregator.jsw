@@ -1,0 +1,390 @@
+// backend/enginePackAggregator.jsw
+import wixData from "wix-data";
+import wixMedia from "wix-media-backend";
+
+/* =========================================================
+  Canonical helpers
+========================================================= */
+
+const STAGES = new Set(["street", "track", "race"]);
+
+function normStr(v) {
+  return String(v ?? "").trim();
+}
+function lc(v) {
+  return normStr(v).toLowerCase();
+}
+
+function normalizeStage(stage, fallback = "street") {
+  const s = lc(stage);
+  return STAGES.has(s) ? s : fallback;
+}
+
+// Loose normalization for CMS values like "Street", "Street Package", etc.
+function normalizeStageLoose(value, fallback = "street") {
+  const s = lc(value);
+  if (!s) return fallback;
+
+  if (STAGES.has(s)) return s;
+
+  if (s.includes("street")) return "street";
+  if (s.includes("track")) return "track";
+  if (s.includes("race")) return "race";
+
+  return fallback;
+}
+
+function stageFromPack(pack, fallback = "street") {
+  return normalizeStageLoose(pack?.packageTier || pack?.tier || pack?.stage || "", fallback);
+}
+
+function normalizeWixStaticUrl(s) {
+  const v = String(s ?? "").trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("//")) return "https:" + v;
+  if (/^static\.wixstatic\.com\//i.test(v)) return "https://" + v;
+  return v;
+}
+
+async function toImageUrl(val) {
+  try {
+    if (!val) return "";
+    if (typeof val === "string") {
+      const s = normalizeWixStaticUrl(val);
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    if (typeof val === "object") {
+      const src = val.src ?? val.url ?? val.fileUrl;
+      if (!src) return "";
+      const s = normalizeWixStaticUrl(String(src));
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    return "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function uniq(arr) {
+  const out = [];
+  const seen = new Set();
+  (Array.isArray(arr) ? arr : []).forEach((v) => {
+    const s = normStr(v);
+    if (!s) return;
+    const k = s.toLowerCase();
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(s);
+  });
+  return out;
+}
+
+function asStringArray(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((x) => normStr(x)).filter(Boolean);
+
+  const s = normStr(v);
+  if (!s) return [];
+  return s
+    .split(/\r?\n/g)
+    .map((x) => normStr(x))
+    .filter(Boolean);
+}
+
+/**
+ * Query all items for a filter (safe pagination)
+ */
+async function queryAll(collection, filter, sortField = "order", asc = true, pageLimit = 1000) {
+  let q = wixData.query(collection);
+  if (filter) q = q.filter(filter);
+  if (sortField) q = asc ? q.ascending(sortField) : q.descending(sortField);
+
+  let res = await q.limit(pageLimit).find();
+  const items = [...(res.items || [])];
+
+  while (res.hasNext()) {
+    res = await res.next();
+    items.push(...(res.items || []));
+  }
+
+  return items;
+}
+
+/**
+ * Try collections in order (handles cases like EnginePackPunchlistLines_READY)
+ */
+async function queryAllFirstAvailable(collectionIds, filter, sortField = "order", asc = true) {
+  const ids = Array.isArray(collectionIds) ? collectionIds : [collectionIds];
+  for (const id of ids) {
+    try {
+      const items = await queryAll(id, filter, sortField, asc);
+      if (items?.length) return items;
+    } catch (_) {
+      // ignore and try next
+    }
+  }
+  return [];
+}
+
+async function safeFindOne(collection, field, value) {
+  try {
+    const res = await wixData.query(collection).eq(field, value).limit(1).find();
+    return res.items?.[0] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Find a pack by packKey, else by _id (fallback).
+ */
+async function findPackByKeyOrId(key) {
+  const k = normStr(key);
+  if (!k) return null;
+
+  const byKey = await safeFindOne("EnginePacks", "packKey", k);
+  if (byKey) return byKey;
+
+  try {
+    const byId = await wixData.get("EnginePacks", k);
+    return byId || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function findSiblingPackByStage(pack, targetStage) {
+  const stage = normalizeStageLoose(targetStage, "");
+  if (!stage) return null;
+
+  const engineKey = normStr(pack?.engineKey);
+  const platform = normStr(pack?.platform);
+
+  if (!engineKey && !platform) return null;
+
+  try {
+    let q = wixData.query("EnginePacks");
+    if (engineKey) q = q.eq("engineKey", engineKey);
+    else q = q.eq("platform", platform);
+
+    const res = await q.limit(50).find();
+    const items = res.items || [];
+    return items.find((p) => stageFromPack(p, "") === stage) || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/* =========================================================
+  1) PACK BUNDLE (Builder / Details / pack-specific)
+========================================================= */
+
+export async function getEnginePackBundle(packKey, stage) {
+  const key = normStr(packKey);
+  if (!key) throw new Error("packKey is required");
+
+  // 1) Parent pack (packKey or _id)
+  let pack = await findPackByKeyOrId(key);
+  if (!pack) throw new Error(`EnginePacks not found for packKey/_id=${key}`);
+
+  // 2) If stage requested, try to swap to sibling pack (Street/Track/Race)
+  const packStage = stageFromPack(pack, "street");
+  const requestedStage = stage ? normalizeStageLoose(stage, packStage) : packStage;
+
+  if (requestedStage && requestedStage !== packStage) {
+    const sibling = await findSiblingPackByStage(pack, requestedStage);
+    if (sibling) pack = sibling;
+  }
+
+  const canonicalPackKey = normStr(pack.packKey || key);
+  const activeStage = stageFromPack(pack, "street");
+  const defaultStage = activeStage;
+
+  // 3) Tiers (IMPORTANT: preserve stageKey base/addon1/addon2)
+  const tiersRaw = await queryAll(
+    "EnginePackTiers",
+    wixData.filter().eq("packKey", canonicalPackKey),
+    "order",
+    true
+  );
+
+  // 4) Punchlist (try READY variant first if present)
+  const punchAll = await queryAllFirstAvailable(
+    ["EnginePackPunchlistLines_READY", "EnginePackPunchlistLines"],
+    wixData.filter().eq("packKey", canonicalPackKey),
+    "order",
+    true
+  );
+
+  // Group punchlist by lineGroup
+  const punchByGroup = {};
+  punchAll.forEach((l) => {
+    const g = normStr(l.lineGroup || "General");
+    if (!punchByGroup[g]) punchByGroup[g] = [];
+    punchByGroup[g].push(l);
+  });
+
+  // Since punchlist is not stage-keyed in your CMS, treat all as active-stage
+  const punchByStage = { street: [], track: [], race: [] };
+  punchByStage[activeStage] = punchAll;
+
+  // 5) Timeline
+  const timeline = await queryAll(
+    "EnginePackTimelineSteps",
+    wixData.filter().eq("packKey", canonicalPackKey),
+    "order",
+    true
+  );
+
+  // 6) Media
+  const media = await queryAll(
+    "EnginePackMedia",
+    wixData.filter().eq("packKey", canonicalPackKey),
+    "order",
+    true
+  );
+
+  // 7) Detail meta (optional)
+  const meta = await safeFindOne("EnginePackDetailMeta", "packKey", canonicalPackKey);
+
+  const heroCandidate =
+    pack.heroImg || pack.cardImg || pack.image_url || pack.imageUrl || pack.image || pack.heroImage || "";
+
+  const packOut = {
+    _id: pack._id,
+    packKey: canonicalPackKey,
+    detailsSlug: pack.detailsSlug || pack.slug || pack.packSlug || canonicalPackKey,
+
+    title: pack.title || "",
+    description: pack.description || "",
+    manufacturer: pack.manufacturer || "",
+    platform: pack.platform || "",
+    engineKey: pack.engineKey || "",
+    engineCode: pack.engineCode || "",
+
+    hpBand: pack.hpBand || "",
+    packageTier: pack.packageTier || pack.tier || "",
+
+    basePriceAUD: pack.basePriceAUD ?? pack.basePriceAud ?? null,
+    baseWeeks: pack.baseWeeks ?? null,
+    fuel: pack.fuel || "",
+
+    heroImg: await toImageUrl(heroCandidate),
+    socialProofImg: await toImageUrl(pack.socialProofImg),
+
+    isSignature: !!pack.isSignature,
+    isFeatured: !!pack.isFeatured,
+
+    chips: asStringArray(pack.chips),
+
+    raw: pack,
+  };
+
+  const tiers = tiersRaw.map((t) => ({
+    _id: t._id,
+    stageKey: normStr(t.stageKey), // preserve base/addon1/addon2
+    cardName: t.cardName || "",
+    tag: t.tag || "",
+    description: t.description || "",
+    includes: asStringArray(t.includes),
+    baseAUD: t.baseAUD ?? t.baseAud ?? null,
+    baseAudDisplay: t.baseAudDisplay || "",
+    installRequired: !!t.installRequired,
+    locked: !!t.locked,
+    defaultChecked: !!t.defaultChecked,
+    contributes: t.contributes === undefined ? true : !!t.contributes,
+    order: t.order ?? null,
+    raw: t,
+  }));
+
+  const tiersByKey = {};
+  tiers.forEach((t) => {
+    const k = t.stageKey || "other";
+    if (!tiersByKey[k]) tiersByKey[k] = [];
+    tiersByKey[k].push(t);
+  });
+
+  return {
+    version: "engine-pack-bundle@2",
+    ts: Date.now(),
+
+    identity: { packKey: canonicalPackKey, activeStage, defaultStage },
+
+    pack: packOut,
+    tiers,
+    tiersByKey,
+
+    punchlist: {
+      all: punchAll,
+      byStage: punchByStage,
+      active: punchByStage[activeStage] || [],
+      byGroup: punchByGroup,
+    },
+
+    timeline,
+    media,
+    meta: meta || null,
+  };
+}
+
+/* =========================================================
+  2) BUILDER BUNDLE (V2) — renamed to avoid collisions
+========================================================= */
+
+export async function getEnginePackBuilderBundleV2({ packKey, stage } = {}) {
+  const requestedKey = normStr(packKey);
+
+  // If no packKey supplied, pick first featured, else first
+  let resolvedKey = requestedKey;
+  if (!resolvedKey) {
+    const all = await queryAll("EnginePacks", null, "order", true);
+    const featured = all.find((p) => !!p.isFeatured) || all[0];
+    resolvedKey = featured?.packKey || featured?._id || "";
+  }
+  if (!resolvedKey) throw new Error("No EnginePacks available to build from");
+
+  const bundle = await getEnginePackBundle(resolvedKey, stage);
+
+  // All tiers belong to the pack's stage (Street/Track/Race)
+  const tiersByStage = { street: [], track: [], race: [] };
+  tiersByStage[bundle.identity.activeStage] = bundle.tiers;
+
+  return {
+    version: "engine-pack-builder@2",
+    ts: Date.now(),
+
+    identity: {
+      view: "engine-pack-builder",
+      packKey: bundle.identity.packKey,
+      activeStage: bundle.identity.activeStage,
+      defaultStage: bundle.identity.defaultStage,
+      contractVersion: 2,
+    },
+
+    pack: bundle.pack,
+    tiers: bundle.tiers,
+
+    tiersByStage,
+    tiersByKey: bundle.tiersByKey,
+
+    punchlist: bundle.punchlist,
+    timeline: bundle.timeline,
+    media: bundle.media,
+    meta: bundle.meta,
+
+    ui: {
+      defaultCurrency: "AUD",
+      rates: { AUD: 1, USD: 0.67, GBP: 0.52, NZD: 1.08, JPY: 110 },
+    },
+
+    debug: { ok: true },
+  };
+}
+
+// Alias to match your current Velo import name (non-colliding):
+export const getEnginePackBundleForBuilder = getEnginePackBuilderBundleV2;

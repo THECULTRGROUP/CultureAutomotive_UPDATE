@@ -1,0 +1,65 @@
+// backend/cultrEdge.jsw
+import { fetch } from 'wix-fetch';
+import wixSecretsBackend from 'wix-secrets-backend';
+
+function clean(v, max = 80) {
+  return typeof v === 'string' ? v.trim().slice(0, max) : '';
+}
+
+async function getBase() {
+  const base = await wixSecretsBackend.getSecret('SUPABASE_EDGE_BASE');
+  return (base || '').replace(/\/+$/, '');
+}
+
+async function getEdgeKey() {
+  return await wixSecretsBackend.getSecret('EDGE_CULTR_KEY');
+}
+
+async function callEdge(path, params = {}) {
+  const base = await getBase();
+  const key = await getEdgeKey();
+
+  if (!base) throw new Error('Missing Wix Secret: SUPABASE_EDGE_BASE');
+  if (!key) throw new Error('Missing Wix Secret: EDGE_CULTR_KEY');
+
+  const url = new URL(`${base}/${path}`);
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, String(v ?? '')));
+
+  const res = await fetch(url.toString(), {
+    method: 'get',
+    headers: {
+      'content-type': 'application/json',
+      'x-cultr-edge-key': key
+    }
+  });
+
+  const txt = await res.text();
+  if (!res.ok) throw new Error(`Edge ${path} failed ${res.status}: ${txt}`);
+
+  try {
+    return JSON.parse(txt);
+  } catch (e) {
+    throw new Error(`Edge ${path} returned non-JSON: ${txt}`);
+  }
+}
+
+export async function edgePostcodeSuggest(q) {
+  const qq = clean(q, 30);
+  if (!qq) return [];
+  const data = await callEdge('postcode-suggest', { q: qq });
+  return data?.results || [];
+}
+
+export async function edgeVehicleSuggest(q) {
+  const qq = clean(q, 60);
+  if (!qq) return [];
+  const data = await callEdge('vehicle-suggest', { q: qq });
+  return data?.results || [];
+}
+
+export async function edgeVehicleVariants(model_id) {
+  const id = clean(model_id, 80);
+  if (!id) return [];
+  const data = await callEdge('vehicle-variants', { model_id: id });
+  return data?.results || [];
+}

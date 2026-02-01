@@ -1,0 +1,54 @@
+// backend/Membership.jsw
+// Culture Automotive — Membership page payload (data collections)
+//
+// ✅ Improvements:
+//  - Adds .limit(1000) + pagination-safe queryAll()
+//  - Adds try/catch + debug info (prevents hard page crashes)
+
+import wixData from "wix-data";
+
+function safeStr(v) {
+  return v === undefined || v === null ? "" : String(v);
+}
+
+async function queryAll(collection, qb = (q) => q, pageLimit = 1000) {
+  const items = [];
+  let res = await qb(wixData.query(collection)).limit(pageLimit).find();
+  items.push(...(res.items || []));
+
+  while (res.hasNext()) {
+    res = await res.next();
+    items.push(...(res.items || []));
+  }
+  return items;
+}
+
+export async function getMembershipPagePayload() {
+  const debug = { ok: true, errors: [] };
+
+  try {
+    const metaRes = await wixData.query("MembershipPageMeta").eq("key", "membership").limit(1).find();
+    const meta = metaRes.items?.[0] || {};
+
+    const [tiers, perks, steps, terms] = await Promise.all([
+      queryAll("MembershipTiers", (q) => q.ascending("sort"), 1000),
+      queryAll("MembershipPerks", (q) => q.ascending("sort"), 1000),
+      queryAll("MembershipSteps", (q) => q.ascending("sort"), 1000),
+      queryAll("MembershipTerms", (q) => q.ascending("sort"), 1000),
+    ]);
+
+    return { meta, tiers, perks, steps, terms, debug };
+  } catch (e) {
+    debug.ok = false;
+    debug.errors.push("Membership payload error: " + (e?.message || safeStr(e)));
+
+    return {
+      meta: {},
+      tiers: [],
+      perks: [],
+      steps: [],
+      terms: [],
+      debug,
+    };
+  }
+}

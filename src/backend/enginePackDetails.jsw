@@ -1,0 +1,469 @@
+/* backend/enginePackDetails.jsw
+   Culture Automotive — Engine Details Payload (for /engine-build/engine-details)
+
+   ✅ FIXES / IMPROVEMENTS:
+   - Robust pack resolution: detailsSlug OR packKey OR _id OR engineKey OR platform
+   - Stage selection is loose-matched (works for "Street", "Street Pack", etc.)
+   - Proper wix:image:// conversion via wix-media-backend (await-safe)
+   - Correct pagination for queryAll() (res.next() must be awaited)
+   - Adds stageCompare[] for Street vs Track vs Race cards on details page
+*/
+
+import wixData from "wix-data";
+import wixMedia from "wix-media-backend";
+
+const COLLECTIONS = {
+  PACKS: "EnginePacks",
+  TIERS: "EnginePackTiers",
+  PUNCH: "EnginePackPunchlistLines",
+  TIMELINE: "EnginePackTimelineSteps",
+  MEDIA: "EnginePackMedia",
+  META: "EnginePackDetailMeta",
+};
+
+const STAGE_KEYS = ["street", "track", "race"];
+const STAGE_LABEL = { street: "Street", track: "Track", race: "Race" };
+
+function safeStr(v, d = "") {
+  if (v === undefined || v === null) return d;
+  return String(v);
+}
+
+function normalizeStageKey(v) {
+  const s = safeStr(v).trim().toLowerCase();
+  if (!s) return "";
+  if (s === "street" || s.includes("street")) return "street";
+  if (s === "track" || s.includes("track")) return "track";
+  if (s === "race" || s.includes("race")) return "race";
+  return "";
+}
+
+function stageLabelFromKey(k) {
+  return STAGE_LABEL[k] || "";
+}
+
+function pick(obj, keys, fallback = "") {
+  if (!obj || typeof obj !== "object") return fallback;
+  for (const k of keys) {
+    const v = obj[k];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return fallback;
+}
+
+function isHttpUrl(s) {
+  return /^https?:\/\//i.test(safeStr(s).trim());
+}
+
+function unwrapMedia(v) {
+  if (!v) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    return v.src || v.url || v.image || v.imageUrl || v.mediaUrl || v.fileUrl || "";
+  }
+  return "";
+}
+
+async function toImageUrl(v) {
+  const raw = unwrapMedia(v);
+  const s = safeStr(raw).trim();
+  if (!s) return "";
+  if (isHttpUrl(s)) return s;
+  if (s.includes("wixstatic.com/media")) return s;
+
+  // wix:image://...
+  try {
+    // wixMedia.getUrl may return a Promise in backend – await works for both Promise and string returns
+    const u = await wixMedia.getUrl(s);
+    return safeStr(u).trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+function toNumber(n, d = 0) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : d;
+}
+
+function parseLines(val) {
+  const s = safeStr(val).trim();
+  if (!s) return [];
+  const parts = s.includes("\n") ? s.split(/\r?\n/g) : s.split(",");
+  return parts.map((x) => safeStr(x).trim()).filter(Boolean);
+}
+
+async function queryAll(collection, qb = (q) => q, pageLimit = 1000) {
+  const items = [];
+  let res = await qb(wixData.query(collection)).limit(pageLimit).find();
+  items.push(...(res.items || []));
+
+  while (res.hasNext()) {
+    res = await res.next();
+    items.push(...(res.items || []));
+  }
+  return items;
+}
+
+async function findOne(q) {
+  const r = await q.limit(1).find();
+  return (r.items && r.items[0]) ? r.items[0] : null;
+}
+
+async function findPacksByEngineKey(engineKey) {
+  const ek = safeStr(engineKey).trim();
+  if (!ek) return [];
+  return queryAll(COLLECTIONS.PACKS, (q) => q.eq("engineKey", ek), 1000);
+}
+
+async function findPacksByPlatform(platform) {
+  const p = safeStr(platform).trim();
+  if (!p) return [];
+  return queryAll(COLLECTIONS.PACKS, (q) => q.eq("platform", p), 1000);
+}
+
+function pickStagePack(packs, stageKey) {
+  if (!Array.isArray(packs) || !packs.length) return null;
+
+  const sk = normalizeStageKey(stageKey);
+  if (sk) {
+    const exact = packs.find((p) => normalizeStageKey(p?.packageTier || p?.tier || p?.stage) === sk);
+    if (exact) return exact;
+  }
+
+  // Prefer Street as a sensible default, else first
+  const street = packs.find((p) => normalizeStageKey(p?.packageTier || p?.tier || p?.stage) === "street");
+  return street || packs[0] || null;
+}
+
+/**
+ * ✅ Resolve packRef in multiple forms:
+ * - detailsSlug
+ * - packKey
+ * - _id
+ * - engineKey (+optional stage)
+ * - platform (+optional stage)
+ */
+async function resolvePack({ packRef, stage }) {
+  const ref = safeStr(packRef).trim();
+  if (!ref) return null;
+
+  const stageKey = normalizeStageKey(stage);
+
+  // 1) detailsSlug
+  let pack = await findOne(wixData.query(COLLECTIONS.PACKS).eq("detailsSlug", ref));
+
+  // 2) packKey
+  if (!pack) pack = await findOne(wixData.query(COLLECTIONS.PACKS).eq("packKey", ref));
+
+  // 3) _id
+  if (!pack) pack = await findOne(wixData.query(COLLECTIONS.PACKS).eq("_id", ref));
+
+  // If we found a pack and a stage was requested, attempt to swap to sibling stage by engineKey
+  if (pack && stageKey && safeStr(pack.engineKey).trim()) {
+    const siblings = await findPacksByEngineKey(pack.engineKey);
+    const alt = pickStagePack(siblings, stageKey);
+    if (alt) pack = alt;
+    return pack;
+  }
+
+  // 4) engineKey (+stage)
+  const byEngine = await findPacksByEngineKey(ref);
+  if (byEngine.length) return pickStagePack(byEngine, stageKey);
+
+  // 5) platform (+stage)
+  const byPlatform = await findPacksByPlatform(ref);
+  if (byPlatform.length) return pickStagePack(byPlatform, stageKey);
+
+  return null;
+}
+
+function normalizeUrl(u) {
+  const s = safeStr(u).trim();
+  if (!s) return "";
+  if (s.startsWith("/")) return s;
+  if (isHttpUrl(s)) return s;
+  return "/" + s;
+}
+
+function buildLinks() {
+  // ✅ Aligns with updated page slugs
+  const packDetailsBase = "/engine-build/engine-details";
+  const startBuildBase = "/engine-build/engine-pack-builder";
+  const catalogueBase = "/engine-build/build-catalogue";
+
+  return {
+    packDetailsBase,
+    detailsBase: packDetailsBase,
+    startBuildBase,
+    startBuild: startBuildBase,
+    builderBase: startBuildBase,
+    catalogueBase,
+    catalogue: catalogueBase,
+    financeBase: "/cultr-finance/loan-options",
+    contact: "/contact",
+    verify: "/verify/application",
+    membership: "/membership-rewards",
+
+    // templates
+    packDetailsUrlTemplate: `${packDetailsBase}?pack={detailsSlug}`,
+    startBuildUrlTemplate: `${startBuildBase}?packKey={packKey}`,
+  };
+}
+
+function numFromPack(packRaw) {
+  // support both camel-case variations
+  return (
+    toNumber(packRaw?.basePriceAUD, NaN) ||
+    toNumber(packRaw?.basePriceAud, NaN) ||
+    toNumber(packRaw?.baseAUD, NaN) ||
+    toNumber(packRaw?.basePrice, NaN) ||
+    0
+  );
+}
+
+async function normalizePackForClient(packRaw) {
+  const hero = pick(packRaw, ["heroImg", "heroImage", "image_url", "imageUrl", "socialProofImg"], "");
+  const card = pick(packRaw, ["image_url", "imageUrl", "heroImg", "heroImage", "socialProofImg"], "");
+
+  const basePriceAUD = numFromPack(packRaw);
+  const isPOA = !!packRaw.isPOA || !basePriceAUD;
+
+  return {
+    _id: packRaw._id,
+    packKey: safeStr(packRaw.packKey).trim(),
+    detailsSlug: safeStr(packRaw.detailsSlug).trim() || safeStr(packRaw.packKey).trim(),
+    engineKey: safeStr(packRaw.engineKey).trim(),
+    platform: safeStr(packRaw.platform).trim(),
+    packageTier: safeStr(packRaw.packageTier).trim(),
+    hpBand: safeStr(packRaw.hpBand).trim(),
+    bestFor: safeStr(packRaw.bestFor).trim(),
+    isPOA,
+    isFeatured: !!packRaw.isFeatured,
+    isSignature: !!packRaw.isSignature,
+
+    basePriceAUD,
+
+    heroImgUrl: await toImageUrl(hero),
+    cardImgUrl: await toImageUrl(card),
+
+    title: safeStr(packRaw.Title || packRaw.title || packRaw.name).trim(),
+    summary: safeStr(packRaw.shortDescription || packRaw.summary || packRaw.description).trim(),
+  };
+}
+
+function stageSortKey(tierLabel) {
+  const k = normalizeStageKey(tierLabel);
+  if (k === "street") return 1;
+  if (k === "track") return 2;
+  if (k === "race") return 3;
+  return 99;
+}
+
+async function buildStageCompare(engineKey, activePackKey, links) {
+  const ek = safeStr(engineKey).trim();
+  if (!ek) return [];
+
+  const siblingsRaw = await findPacksByEngineKey(ek);
+
+  const normalized = await Promise.all(
+    siblingsRaw.map(async (p) => {
+      const np = await normalizePackForClient(p);
+      const stageKey = normalizeStageKey(np.packageTier) || "street";
+
+      // Include stage in URL for clarity (still works if omitted)
+      const detailsUrl = normalizeUrl(
+        `${links.packDetailsBase}?pack=${encodeURIComponent(np.detailsSlug)}&stage=${encodeURIComponent(stageKey)}`
+      );
+
+      return {
+        ...np,
+        stageKey,
+        stageLabel: stageLabelFromKey(stageKey),
+        isActive: np.packKey === activePackKey,
+        detailsUrl,
+
+        startBuildUrl: normalizeUrl(
+          `${links.startBuildBase}?packKey=${encodeURIComponent(np.packKey)}&source=engine-details`
+        ),
+        financeUrl: normalizeUrl(
+          `${links.financeBase}?packKey=${encodeURIComponent(np.packKey)}&source=engine-details`
+        ),
+      };
+    })
+  );
+
+  normalized.sort((a, b) => stageSortKey(a.packageTier) - stageSortKey(b.packageTier));
+  return normalized;
+}
+
+function groupPunchByType(lines) {
+  const out = {
+    partsList: [],
+    blockSpecs: [],
+    headSpecs: [],
+    other: [],
+  };
+
+  for (const l of (lines || [])) {
+    const t = safeStr(l.type).trim();
+    if (t === "partsList") out.partsList.push(l);
+    else if (t === "blockSpecs") out.blockSpecs.push(l);
+    else if (t === "headSpecs") out.headSpecs.push(l);
+    else out.other.push(l);
+  }
+
+  return out;
+}
+
+function safeJsonParse(v, fallback) {
+  if (v === undefined || v === null) return fallback;
+  if (typeof v === "object") return v;
+  const s = safeStr(v).trim();
+  if (!s) return fallback;
+  try { return JSON.parse(s); } catch (e) { return fallback; }
+}
+
+export async function getEnginePackDetailsPayload({ packRef, stage } = {}) {
+  const links = buildLinks();
+  const debug = { ok: true, errors: [] };
+
+  try {
+    const packRaw = await resolvePack({ packRef, stage });
+    if (!packRaw) {
+      return {
+        ok: false,
+        error: "PACK_NOT_FOUND",
+        ctx: { packRef: safeStr(packRef), stage: safeStr(stage) },
+        links,
+        debug: { ok: false, errors: ["Pack not found. Use ?pack=detailsSlug or ?packKey= or ?pack=engineKey&stage=street"] },
+      };
+    }
+
+    const pack = await normalizePackForClient(packRaw);
+
+    // TIERS
+    const tiersRaw = await queryAll(
+      COLLECTIONS.TIERS,
+      (q) => q.eq("packKey", pack.packKey).ascending("order"),
+      1000
+    );
+
+    const tiers = tiersRaw.map((t) => ({
+      _id: t._id,
+      packKey: safeStr(t.packKey).trim(),
+      stageKey: safeStr(t.stageKey).trim(), // base/addon1/addon2 in your CSV
+      cardName: safeStr(t.cardName).trim(),
+      tag: safeStr(t.tag).trim(),
+      description: safeStr(t.description).trim(),
+      includes: parseLines(t.includes),
+      baseAud: toNumber(t.baseAud ?? t.baseAUD, 0),
+      baseAudDisplay: safeStr(t.baseAudDisplay).trim(),
+      installRequired: !!t.installRequired,
+      locked: !!t.locked,
+      defaultChecked: !!t.defaultChecked,
+      contributes: safeStr(t.contributes).trim(),
+      order: toNumber(t.order, 0),
+    }));
+
+    // PUNCHLIST LINES
+    const punchRaw = await queryAll(
+      COLLECTIONS.PUNCH,
+      (q) => q.eq("packKey", pack.packKey).ascending("order"),
+      1000
+    );
+
+    const punch = groupPunchByType(
+      punchRaw.map((l) => ({
+        _id: l._id,
+        packKey: safeStr(l.packKey).trim(),
+        type: safeStr(l.type).trim(), // partsList / blockSpecs / headSpecs
+        label: safeStr(l.label).trim(),
+        value: safeStr(l.value).trim(),
+        order: toNumber(l.order, 0),
+      }))
+    );
+
+    // TIMELINE
+    const timelineRaw = await queryAll(
+      COLLECTIONS.TIMELINE,
+      (q) => q.eq("packKey", pack.packKey).ascending("order"),
+      1000
+    );
+
+    const timeline = timelineRaw.map((s) => ({
+      _id: s._id,
+      packKey: safeStr(s.packKey).trim(),
+      stepKey: safeStr(s.stepKey).trim(),
+      weekLabel: safeStr(s.weekLabel).trim(),
+      title: safeStr(s.Title || s.title).trim(),
+      text: safeStr(s.text).trim(),
+      order: toNumber(s.order, 0),
+    }));
+
+    // MEDIA / GALLERY
+    const mediaRaw = await queryAll(
+      COLLECTIONS.MEDIA,
+      (q) => q.eq("packKey", pack.packKey).ascending("order"),
+      1000
+    );
+
+    const gallery = await Promise.all(
+      mediaRaw.map(async (m) => {
+        const img = pick(m, ["url", "imageUrl", "image", "image_url", "mediaUrl"], "");
+        return {
+          _id: m._id,
+          packKey: safeStr(m.packKey).trim(),
+          alt: safeStr(m.alt).trim(),
+          url: await toImageUrl(img),
+          order: toNumber(m.order, 0),
+        };
+      })
+    );
+
+    // META
+    const metaRaw = await findOne(wixData.query(COLLECTIONS.META).eq("packKey", pack.packKey));
+
+    const meta = metaRaw ? {
+      packKey: safeStr(metaRaw.packKey).trim(),
+      // these fields exist in your CSV as Json columns:
+      cta: safeJsonParse(metaRaw.ctaJson, null),
+      weeklySpecials: safeJsonParse(metaRaw.weeklySpecialsJson, []),
+      featureSegments: safeJsonParse(metaRaw.featureSegmentsJson, []),
+      keyComponents: safeJsonParse(metaRaw.keyComponentsJson, null),
+    } : null;
+
+    // Stage Compare (Street/Track/Race)
+    const stageCompare = await buildStageCompare(pack.engineKey, pack.packKey, links);
+
+    return {
+      ok: true,
+      ctx: {
+        packRef: safeStr(packRef),
+        stage: normalizeStageKey(stage) || normalizeStageKey(pack.packageTier) || "",
+        resolvedPackKey: pack.packKey,
+        engineKey: pack.engineKey,
+      },
+      pack,
+      tiers,
+      punch,
+      timeline,
+      gallery,
+      meta,
+      stageCompare,
+      links,
+      debug,
+    };
+  } catch (err) {
+    debug.ok = false;
+    debug.errors.push("Details payload error: " + (err?.message ?? String(err)));
+
+    return {
+      ok: false,
+      error: "DETAILS_PAYLOAD_ERROR",
+      ctx: { packRef: safeStr(packRef), stage: safeStr(stage) },
+      links,
+      debug,
+    };
+  }
+}

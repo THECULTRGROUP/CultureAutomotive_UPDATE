@@ -1,0 +1,474 @@
+/***************************************
+ * backend/enginePackBuilderBundler.jsw
+ * Culture Automotive — Engine Pack Builder Payload Bundler
+ *
+ * Purpose:
+ *  - Provides the /engine-build/engine-pack-builder iframe with a 3-tier bundle:
+ *    Street / Track / Race (all under the same engineKey)
+ *
+ * ✅ FIXES / IMPROVEMENTS:
+ *  - Exports getEnginePackBuilderBundle (matches updated Velo page import)
+ *  - Keeps getEnginePackBuilderPayload as a backwards-compatible alias
+ *  - Aligns all internal links with the new /engine-build/* routes
+ *  - More tolerant field mapping (basePriceAud vs basePriceAUD, etc.)
+ *  - Converts wix:image:// and Wix media objects to browser-usable URLs
+ *  - Adds include flags (includePunchlist/includeMeta/includeTimeline/includeMedia)
+ ***************************************/
+
+import wixData from "wix-data";
+import wixMedia from "wix-media-backend";
+
+/* ===== Collection IDs (Content Manager IDs) ===== */
+const COL = {
+  PACKS: "EnginePacks",
+  TIERS: "EnginePackTiers",
+  TIMELINE: "EnginePackTimelineSteps",
+  PUNCHLIST: "EnginePackPunchlistLines",
+  MEDIA: "EnginePackMedia",
+  META: "EnginePackDetailMeta",
+};
+
+/* ===== Helpers ===== */
+function normStr(v) {
+  return v === undefined || v === null ? "" : String(v).trim();
+}
+function normLower(v) {
+  return normStr(v).toLowerCase();
+}
+function firstNonEmpty(...vals) {
+  for (const v of vals) {
+    const s = normStr(v);
+    if (s) return s;
+  }
+  return "";
+}
+function toNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function asArray(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v.map((x) => normStr(x)).filter(Boolean);
+  return String(v)
+    .split(/\r?\n|,|\||;/g)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeWixStaticUrl(s) {
+  const v = String(s ?? "").trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("//")) return "https:" + v;
+  if (/^static\.wixstatic\.com\//i.test(v)) return "https://" + v;
+  return v;
+}
+
+async function toImageUrl(val) {
+  try {
+    if (!val) return "";
+    if (typeof val === "string") {
+      const s = normalizeWixStaticUrl(val);
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    if (typeof val === "object") {
+      const src = val.src ?? val.url ?? val.fileUrl ?? val.imageUrl ?? val.image ?? "";
+      if (!src) return "";
+      const s = normalizeWixStaticUrl(String(src));
+      if (/^https?:\/\//i.test(s)) return s;
+      if (s.startsWith("wix:image://") || s.startsWith("wix:")) return await wixMedia.getUrl(s);
+      return s;
+    }
+    return "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function tierKeyFromPackDoc(packDoc = {}) {
+  const t = normLower(firstNonEmpty(packDoc.packageTier, packDoc.powerTier, packDoc.tier, packDoc.packTier, packDoc.stage));
+  if (t.includes("street")) return "street";
+  if (t.includes("track")) return "track";
+  if (t.includes("race")) return "race";
+  return "";
+}
+
+function labelFromTierKey(tierKey) {
+  if (tierKey === "street") return "Street Pack";
+  if (tierKey === "track") return "Track Pack";
+  if (tierKey === "race") return "Race Pack";
+  return "Engine Pack";
+}
+
+function platformLabelFromPack(packDoc = {}) {
+  const manufacturer = normStr(packDoc.manufacturer);
+  const platform = normStr(packDoc.platform);
+  const engineCode = normStr(packDoc.engineCode);
+  const left = [manufacturer, platform].filter(Boolean).join(" • ");
+  const right = engineCode ? `(${engineCode})` : "";
+  return [left, right].filter(Boolean).join(" ").trim() || platform || manufacturer || "Selected platform";
+}
+
+async function findOneByField(colId, field, value) {
+  const v = normStr(value);
+  if (!v) return null;
+  const r = await wixData.query(colId).eq(field, v).limit(1).find();
+  return r.items?.[0] || null;
+}
+
+async function findAllByField(colId, field, value) {
+  const v = normStr(value);
+  if (!v) return [];
+  const r = await wixData.query(colId).eq(field, v).limit(1000).find();
+  return r.items || [];
+}
+
+async function findAllByFieldSorted(colId, field, value, sortField = "sortOrder") {
+  const v = normStr(value);
+  if (!v) return [];
+  let q = wixData.query(colId).eq(field, v).limit(1000);
+  try {
+    q = q.ascending(sortField);
+  } catch (_) {
+    // ignore
+  }
+  const r = await q.find();
+  return r.items || [];
+}
+
+function parseJsonSafe(v, fallback) {
+  try {
+    if (!v) return fallback;
+    if (typeof v === "object") return v;
+    return JSON.parse(String(v));
+  } catch (_) {
+    return fallback;
+  }
+}
+
+/* ===== Mappers ===== */
+
+function mapPackDoc(packDoc = {}, tierKey = "") {
+  const key = tierKey || tierKeyFromPackDoc(packDoc) || "street";
+
+  return {
+    id: packDoc._id,
+    _id: packDoc._id,
+    packKey: normStr(packDoc.packKey),
+    engineKey: normStr(packDoc.engineKey),
+    tierKey: key,
+
+    displayName: normStr(firstNonEmpty(packDoc.packageTier, labelFromTierKey(key))).includes("Pack")
+      ? normStr(firstNonEmpty(packDoc.packageTier, labelFromTierKey(key)))
+      : `${normStr(firstNonEmpty(packDoc.packageTier, labelFromTierKey(key)))} Pack`,
+
+    hpBand: normStr(packDoc.hpBand),
+    tagline: normStr(firstNonEmpty(packDoc.bestFor, packDoc.description)),
+    platform: normStr(packDoc.platform),
+    manufacturer: normStr(packDoc.manufacturer),
+    engineCode: normStr(packDoc.engineCode),
+    nickname: normStr(packDoc.nickname),
+
+    turnaroundText: normStr(firstNonEmpty(packDoc.turnaroundText, packDoc.turnaround)),
+    warrantyText: normStr(firstNonEmpty(packDoc.warrantyText, packDoc.warrantySummary)),
+    intendedUse: normStr(firstNonEmpty(packDoc.bestFor, packDoc.intendedUse)),
+    fuel: normStr(packDoc.fuel),
+
+    // ✅ tolerate basePrice field name differences
+    basePriceAUD: toNum(firstNonEmpty(packDoc.basePriceAUD, packDoc.basePriceAud, packDoc.baseAUD, packDoc.basePrice, 0), 0),
+    baseLongMotorAUD: toNum(firstNonEmpty(packDoc.baseLongMotorAUD, packDoc.baseLongMotorAud, 0), 0),
+    stageBoostAUD: toNum(firstNonEmpty(packDoc.stageBoostAUD, packDoc.stageBoostAud, 0), 0),
+    stageSupportAUD: toNum(firstNonEmpty(packDoc.stageSupportAUD, packDoc.stageSupportAud, 0), 0),
+    internalCostAUD: toNum(firstNonEmpty(packDoc.internalCostAUD, packDoc.internalCostAud, 0), 0),
+    benchmarkAUD: toNum(firstNonEmpty(packDoc.benchmarkAUD, packDoc.benchmarkAud, 0), 0),
+
+    baseWeeks: toNum(firstNonEmpty(packDoc.baseWeeks, 0), 0),
+
+    chips: asArray(packDoc.chips),
+    theme: normStr(packDoc.theme) || key,
+
+    // raw values; buildPack() will convert these to proper URLs
+    heroImg: firstNonEmpty(packDoc.heroImg, packDoc.heroImage, packDoc.image_url, packDoc.imageUrl, ""),
+    packageImg: firstNonEmpty(packDoc.image_url, packDoc.imageUrl, ""),
+    socialProofImg: firstNonEmpty(packDoc.socialProofImg, ""),
+  };
+}
+
+function mapTierDoc(t = {}) {
+  const stageKeyRaw = normLower(firstNonEmpty(t.stageKey, t.stage, t.tierKey));
+  const stageKey = stageKeyRaw || "base";
+
+  // Normalize a few legacy keys, but still keep stageKey for the UI mapping
+  const stage =
+    stageKey.includes("base") ? "base" :
+    stageKey.includes("boost") ? "boost" :
+    stageKey.includes("support") ? "support" :
+    stageKey;
+
+  const includesRaw = firstNonEmpty(t.includes, t.includesList, t.inclusions);
+  const order = toNum(firstNonEmpty(t.order, t.sortOrder, 0), 0);
+
+  return {
+    _id: t._id,
+    id: t._id,
+
+    stage,
+    stageKey,
+
+    stageLabel: normStr(t.stageLabel),
+    cardName: normStr(firstNonEmpty(t.cardName, t.displayName, t.title, t.name)),
+    tag: normStr(t.tag),
+    description: normStr(firstNonEmpty(t.description, t.summary)),
+
+    // ✅ builder iframe expects t.includes (array or string)
+    includes: asArray(includesRaw),
+
+    installRequired: normLower(firstNonEmpty(t.installRequired, t.installModeRequired, "any")),
+
+    // ✅ builder iframe expects baseAUD
+    baseAUD: toNum(firstNonEmpty(t.baseAUD, t.baseAud, t.basePriceAUD, t.basePriceAud, t.priceAUD, t.priceAud, t.costAUD, t.costAud, 0), 0),
+
+    contributes: t.contributes !== false,
+    includeDefault: t.includeDefault !== false,
+    locked: t.locked === true || stage === "base",
+
+    order,
+    sortOrder: order,
+  };
+}
+
+function mapTimelineDoc(s = {}) {
+  return {
+    id: s._id,
+    _id: s._id,
+    order: toNum(firstNonEmpty(s.sortOrder, s.order, 0), 0),
+    weekLabel: normStr(firstNonEmpty(s.weekRange, s.weekLabel, s.badge)),
+    title: normStr(firstNonEmpty(s.headline, s.title)),
+    text: normStr(firstNonEmpty(s.copy, s.text, s.description)),
+  };
+}
+
+function mapPunchDoc(l = {}) {
+  const qty = normStr(l.qty) || "";
+  const unit = toNum(firstNonEmpty(l.unitCostAUD, l.unitCostAud, l.unitCost, 0), 0);
+  const line = toNum(firstNonEmpty(l.lineTotalAUD, l.lineTotalAud, l.lineTotal, 0), unit);
+  const order = toNum(firstNonEmpty(l.order, l.sortOrder, 0), 0);
+
+  return {
+    id: l._id,
+    _id: l._id,
+    order,
+    sortOrder: order,
+
+    lineItem: normStr(firstNonEmpty(l.lineItem, l.title, l.name)),
+    qty,
+    unitCostAUD: unit,
+    lineTotalAUD: line,
+  };
+}
+
+function mapMediaDoc(m = {}) {
+  return {
+    heroImg: firstNonEmpty(m.heroImageUrl, m.heroImg, m.heroImage, ""),
+    packageImg: firstNonEmpty(m.packageImageUrl, m.packageImg, ""),
+    socialProofImg: firstNonEmpty(m.socialImageUrl, m.socialProofImg, ""),
+    galleryImages: asArray(m.galleryImages),
+  };
+}
+
+function mapMetaDoc(meta = {}) {
+  return {
+    eyebrowOverride: normStr(meta.eyebrowOverride),
+    heroEyebrow: normStr(meta.heroEyebrow),
+    heroCaptionOverride: normStr(meta.heroCaptionOverride),
+
+    includedIntro: normStr(meta.includedIntro),
+    tierCompareIntro: normStr(meta.tierCompareIntro),
+    workflowIntro: normStr(meta.workflowIntro),
+
+    financeText1: normStr(meta.financeText1),
+    financeText2: normStr(meta.financeText2),
+
+    trustIntro: normStr(meta.trustIntro),
+    momentsIntro: normStr(meta.momentsIntro),
+
+    hideTierCompare: meta.hideTierCompare === true,
+    hideWorkflow: meta.hideWorkflow === true,
+    hideFinance: meta.hideFinance === true,
+    hideTrust: meta.hideTrust === true,
+    hideMoments: meta.hideMoments === true,
+    hideFAQ: meta.hideFAQ === true,
+
+    faq: parseJsonSafe(meta.faqJson, []),
+    tierLadder: parseJsonSafe(meta.tierLadderJson, null),
+    visualMoments: parseJsonSafe(meta.visualMomentsJson, []),
+    trustTiles: parseJsonSafe(meta.trustTilesJson, []),
+  };
+}
+
+function buildLinks() {
+  // ✅ Shared navigation keys across all engine-build iframes
+  return {
+    // canonical slugs
+    catalogue: "/engine-build/build-catalogue",
+    catalogueBase: "/engine-build/build-catalogue",
+    selectPackage: "/engine-build/select-package",
+    selectPackageBase: "/engine-build/select-package",
+    packDetailsBase: "/engine-build/engine-details",
+    detailsBase: "/engine-build/engine-details",
+    startBuild: "/engine-build/engine-pack-builder",
+    startBuildBase: "/engine-build/engine-pack-builder",
+    builderBase: "/engine-build/engine-pack-builder",
+
+    // legacy (kept for older templates)
+    backToCatalogue: "/engine-build/build-catalogue",
+
+    // actions
+    book: "/engine-build/build-form",
+    finance: "/cultr-finance/loan-options",
+    contact: "/contact",
+    refer: "/refer-friends",
+    membership: "/membership-rewards",
+  };
+}
+
+/* =========================================================
+   Primary export for updated builder page code
+========================================================= */
+
+export async function getEnginePackBuilderBundle(params = {}) {
+  const q = params || {};
+
+  const requestedEngineKey = firstNonEmpty(q.engineKey, q.engine, q.platformKey, q.k, q.key);
+  const requestedPackKey = firstNonEmpty(q.packKey, q.pack, q.id, q.slug);
+  const requestedDetailsSlug = firstNonEmpty(q.detailsSlug, q.ds);
+  const requestedTier = normLower(firstNonEmpty(q.initialTier, q.selectedTier, q.tier, q.stage));
+
+  const includePunchlist = q.includePunchlist !== false;
+  const includeMeta = q.includeMeta !== false;
+  const includeTimeline = q.includeTimeline !== false;
+  const includeMedia = q.includeMedia !== false;
+
+  // Resolve the primary pack first (for engineKey + meta context)
+  let basePack = null;
+
+  if (requestedPackKey) basePack = await findOneByField(COL.PACKS, "packKey", requestedPackKey);
+  if (!basePack && requestedDetailsSlug) basePack = await findOneByField(COL.PACKS, "detailsSlug", requestedDetailsSlug);
+  if (!basePack && requestedPackKey) basePack = await findOneByField(COL.PACKS, "_id", requestedPackKey);
+
+  const engineKey = firstNonEmpty(basePack?.engineKey, requestedEngineKey);
+
+  if (!engineKey) {
+    return {
+      ok: false,
+      error: "Missing engineKey/packKey. Provide ?engineKey=... or ?packKey=...",
+      meta: { title: "Engine Pack Builder", subtitle: "No platform selected." },
+      packs: {},
+      links: buildLinks(),
+      debug: { params: q },
+    };
+  }
+
+  const packRes = await wixData.query(COL.PACKS).eq("engineKey", engineKey).limit(1000).find();
+  const packDocs = packRes.items || [];
+
+  const mapped = {};
+  for (const doc of packDocs) {
+    const tierKey = tierKeyFromPackDoc(doc);
+    if (!tierKey) continue;
+    mapped[tierKey] = doc;
+  }
+
+  const streetDoc = mapped.street || packDocs[0] || null;
+  const trackDoc = mapped.track || null;
+  const raceDoc = mapped.race || null;
+
+  const primaryDoc = basePack || streetDoc || trackDoc || raceDoc;
+  const platformLabel = platformLabelFromPack(primaryDoc || {});
+  const platform = normStr(primaryDoc?.platform || "");
+  const manufacturer = normStr(primaryDoc?.manufacturer || "");
+  const engineCode = normStr(primaryDoc?.engineCode || "");
+  const nickname = normStr(primaryDoc?.nickname || "");
+
+  async function buildPack(tierKey, packDoc) {
+    if (!packDoc) return null;
+    const packKey = normStr(packDoc.packKey) || normStr(packDoc._id);
+
+    // Fetch related docs (conditionally)
+    const [tiers, timeline, punchlist, mediaRows, metaRows] = await Promise.all([
+      findAllByFieldSorted(COL.TIERS, "packKey", packKey, "order"),
+      includeTimeline ? findAllByFieldSorted(COL.TIMELINE, "packKey", packKey, "order") : Promise.resolve([]),
+      includePunchlist ? findAllByFieldSorted(COL.PUNCHLIST, "packKey", packKey, "order") : Promise.resolve([]),
+      includeMedia ? findAllByField(COL.MEDIA, "packKey", packKey) : Promise.resolve([]),
+      includeMeta ? findAllByField(COL.META, "packKey", packKey) : Promise.resolve([]),
+    ]);
+
+    const base = mapPackDoc(packDoc, tierKey);
+
+    // Attach meta + media
+    const media = mapMediaDoc((mediaRows && mediaRows[0]) || {});
+    const meta = mapMetaDoc((metaRows && metaRows[0]) || {});
+
+    // Convert images to usable URLs (prefer media rows first, then pack doc)
+    base.heroImg = await toImageUrl(firstNonEmpty(media.heroImg, base.heroImg));
+    base.packageImg = await toImageUrl(firstNonEmpty(media.packageImg, base.packageImg, base.heroImg));
+    base.socialProofImg = await toImageUrl(firstNonEmpty(media.socialProofImg, base.socialProofImg, base.heroImg));
+
+    // Gallery images (optional)
+    base.galleryImages = await Promise.all((media.galleryImages || []).map(toImageUrl));
+
+    base.meta = meta;
+
+    base.tiers = (tiers || []).map(mapTierDoc).sort((a, b) => (a.order || 0) - (b.order || 0));
+    base.timeline = (timeline || []).map(mapTimelineDoc).sort((a, b) => (a.order || 0) - (b.order || 0));
+    base.punchlist = (punchlist || []).map(mapPunchDoc).sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    return base;
+  }
+
+  const [street, track, race] = await Promise.all([
+    buildPack("street", streetDoc),
+    buildPack("track", trackDoc),
+    buildPack("race", raceDoc),
+  ]);
+
+  // Selected tier fallback
+  let selectedTier = requestedTier;
+  if (!selectedTier) selectedTier = tierKeyFromPackDoc(basePack) || "street";
+  if (!["street", "track", "race"].includes(selectedTier)) selectedTier = "street";
+
+  return {
+    ok: true,
+
+    // Meta is what the iframe reads for top banner
+    meta: {
+      title: "Engine Pack Builder",
+      subtitle: "Review your build package and lock your booking with confidence.",
+      engineKey,
+      platform,
+      platformLabel,
+      manufacturer,
+      engineCode,
+      nickname,
+      selectedTier,
+    },
+
+    engineKey,
+    platform,
+    platformLabel,
+    selectedTier,
+
+    packs: { street, track, race },
+    links: buildLinks(),
+  };
+}
+
+/* =========================================================
+   Back-compat export (older code may import this name)
+========================================================= */
+
+export async function getEnginePackBuilderPayload(params = {}) {
+  return getEnginePackBuilderBundle(params);
+}

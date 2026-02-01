@@ -1,0 +1,100 @@
+/***************************************
+ * backend/buildWorkflowBundler.jsw
+ * Culture Automotive — Build Workflow Bundle
+ *
+ * Pulls from: EnginePackTimelineSteps
+ * Keying: packKey (required) + stepKey (included per row)
+ ***************************************/
+import wixData from "wix-data";
+
+const COL = {
+  TIMELINE: "EnginePackTimelineSteps",
+  PACKS: "EnginePacks",
+};
+
+function normStr(v){ return v === undefined || v === null ? "" : String(v).trim(); }
+function firstNonEmpty(...vals){
+  for(const v of vals){ const s = normStr(v); if(s) return s; }
+  return "";
+}
+function toNum(v,f=0){ const n = Number(v); return Number.isFinite(n) ? n : f; }
+
+function buildLinks(){
+  return {
+    catalogue: "/engine-build/build-catalogue",
+    selectPackage: "/engine-build/select-package",
+    builderBase: "/engine-build/engine-pack-builder",
+    workflow: "/engine-build/build-workflow",
+    contact: "/contact",
+  };
+}
+
+async function findOneByField(colId, field, value) {
+  const v = normStr(value);
+  if (!v) return null;
+  const r = await wixData.query(colId).eq(field, v).limit(1).find();
+  return r.items?.[0] || null;
+}
+
+function mapStep(row = {}){
+  return {
+    id: row._id,
+    stepKey: normStr(row.stepKey),
+    title: normStr(row.Title || row.title),
+    weekLabel: normStr(row.weekLabel),
+    text: normStr(row.text),
+    order: toNum(row.order, 0),
+  };
+}
+
+export async function getBuildWorkflowBundle(params = {}) {
+  const q = params || {};
+  const requestedPackKey = firstNonEmpty(q.packKey, q.pack, q.id, q.slug);
+  const requestedDetailsSlug = firstNonEmpty(q.detailsSlug, q.ds);
+
+  // Resolve packKey if only detailsSlug provided
+  let packKey = normStr(requestedPackKey);
+  let packDoc = null;
+
+  if (!packKey && requestedDetailsSlug) {
+    packDoc = await findOneByField(COL.PACKS, "detailsSlug", requestedDetailsSlug);
+    packKey = normStr(packDoc?.packKey || "");
+  }
+  if (packKey && !packDoc) {
+    packDoc = await findOneByField(COL.PACKS, "packKey", packKey);
+  }
+
+  if (!packKey) {
+    return {
+      ok: false,
+      error: "Missing packKey. Provide ?packKey=... (or ?detailsSlug=...)",
+      meta: { title: "Build Workflow", subtitle: "No package selected.", packKey: "" },
+      steps: [],
+      links: buildLinks(),
+      debug: { params: q },
+    };
+  }
+
+  const res = await wixData
+    .query(COL.TIMELINE)
+    .eq("packKey", packKey)
+    .ascending("order")
+    .limit(1000)
+    .find();
+
+  const steps = (res.items || []).map(mapStep).sort((a,b)=> (a.order||0)-(b.order||0));
+
+  return {
+    ok: true,
+    meta: {
+      title: "Build Workflow",
+      subtitle: "What to expect from deposit to delivery.",
+      packKey,
+      packageName: normStr(packDoc?.packageTier || packDoc?.displayName || ""),
+      platform: normStr(packDoc?.platform || ""),
+      platformLabel: [packDoc?.manufacturer, packDoc?.platform, packDoc?.engineCode].filter(Boolean).join(" • "),
+    },
+    steps,
+    links: buildLinks(),
+  };
+}

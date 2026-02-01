@@ -1,0 +1,122 @@
+/***************************************
+ * backend/buildConfirmedBundler.jsw
+ * Culture Automotive — Build Confirmed Bundle
+ ***************************************/
+import wixData from "wix-data";
+
+const COL = {
+  PACKS: "EnginePacks", // adjust if your collection name differs
+};
+
+function normStr(v) { return v === undefined || v === null ? "" : String(v).trim(); }
+function firstNonEmpty(...vals) {
+  for (const v of vals) { const s = normStr(v); if (s) return s; }
+  return "";
+}
+
+async function findOneByField(colId, field, value) {
+  const v = normStr(value);
+  if (!v) return null;
+  const r = await wixData.query(colId).eq(field, v).limit(1).find();
+  return r.items?.[0] || null;
+}
+
+function buildLinks() {
+  return {
+    catalogue: "/engine-build/build-catalogue",
+    selectPackage: "/engine-build/select-package",
+    builderBase: "/engine-build/engine-pack-builder",
+    workflow: "/engine-build/build-workflow",
+    confirm: "/engine-build/build-confirm",
+  };
+}
+
+function stageLabelFrom(stage) {
+  const s = normStr(stage).toLowerCase();
+  if (!s) return "";
+  if (s === "street") return "Street";
+  if (s === "track") return "Track";
+  if (s === "race") return "Race";
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function installLabelFrom(mode) {
+  const m = normStr(mode).toLowerCase();
+  if (!m) return "";
+  if (m === "culture") return "Culture install";
+  if (m === "external") return "External install";
+  return m.charAt(0).toUpperCase() + m.slice(1);
+}
+
+export async function getBuildConfirmedBundle(params = {}) {
+  const q = params || {};
+
+  // Pack identification
+  const requestedPackKey = firstNonEmpty(q.packKey, q.pack, q.id, q.slug);
+
+  // Optional meta from query (so it still works if pack doc is missing)
+  const stageKey = normStr(firstNonEmpty(q.stage, q.stageKey, q.tier, q.level));
+  const installMode = normStr(firstNonEmpty(q.install, q.installMode));
+
+  if (!requestedPackKey) {
+    return {
+      ok: false,
+      error: "Missing packKey. Provide ?packKey=...",
+      meta: { packKey: "", packName: "Build Confirmed", platformLabel: "", stageKey, stageLabel: stageLabelFrom(stageKey), installMode, installModeLabel: installLabelFrom(installMode) },
+      nextSteps: [],
+      youProvide: [],
+      links: buildLinks(),
+      debug: { params: q },
+    };
+  }
+
+  // Try enrich from EnginePacks
+  let packDoc = await findOneByField(COL.PACKS, "packKey", requestedPackKey);
+  if (!packDoc) {
+    // fallback possibilities if your pack collection uses different field naming
+    packDoc = await findOneByField(COL.PACKS, "slug", requestedPackKey);
+  }
+
+  const packName =
+    normStr(packDoc?.displayName) ||
+    normStr(packDoc?.packageName) ||
+    normStr(packDoc?.title) ||
+    "Selected build package";
+
+  const platformLabel =
+    [packDoc?.manufacturer, packDoc?.platform, packDoc?.engineCode]
+      .filter(Boolean)
+      .map(v => normStr(v))
+      .filter(Boolean)
+      .join(" • ");
+
+  // Provide strong default copy
+  const nextSteps = [
+    "We confirm your build goal, fuel choice, and vehicle context.",
+    "We check engine condition and lock machining requirements (if needed).",
+    "We finalise inclusions + parts list and issue a formal proposal.",
+    "We confirm timeline, payment steps, and your delivery / install plan.",
+  ];
+
+  const youProvide = [
+    "Vehicle + engine details (current setup, ECU, injectors, turbo, etc).",
+    "Fuel choice + power goal (and intended use).",
+    "Install preference (Culture install vs external workshop).",
+  ];
+
+  return {
+    ok: true,
+    meta: {
+      packKey: requestedPackKey,
+      packName,
+      platformLabel,
+      stageKey,
+      stageLabel: stageLabelFrom(stageKey),
+      installMode,
+      installModeLabel: installLabelFrom(installMode),
+    },
+    nextSteps,
+    youProvide,
+    links: buildLinks(),
+  };
+}
